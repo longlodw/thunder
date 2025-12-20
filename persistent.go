@@ -111,7 +111,7 @@ func (pr *Persistent) Name() string {
 }
 
 func (pr *Persistent) Columns() []string {
-	return pr.columns
+	return slices.Clone(pr.columns)
 }
 
 func (pr *Persistent) Project(mapping map[string]string) (Selector, error) {

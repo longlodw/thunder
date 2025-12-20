@@ -2,8 +2,8 @@ package thunder
 
 import "iter"
 
-type ISelectable interface {
+type Selector interface {
 	Select(ops ...Op) (iter.Seq2[map[string]any, error], error)
 	Columns() []string
-	Project(mapping map[string]string) (*Projection, error)
+	Project(mapping map[string]string) (Selector, error)
 }

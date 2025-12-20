@@ -17,43 +17,49 @@ type Op struct {
 	Type  OpType
 }
 
-func Eq(value any) Op {
+func Eq(field string, value any) Op {
 	return Op{
+		Field: field,
 		Value: value,
 		Type:  OpEq,
 	}
 }
 
-func Ne(value any) Op {
+func Ne(field string, value any) Op {
 	return Op{
+		Field: field,
 		Value: value,
 		Type:  OpNe,
 	}
 }
 
-func Gt(value any) Op {
+func Gt(field string, value any) Op {
 	return Op{
+		Field: field,
 		Value: value,
 		Type:  OpGt,
 	}
 }
 
-func Lt(value any) Op {
+func Lt(field string, value any) Op {
 	return Op{
+		Field: field,
 		Value: value,
 		Type:  OpLt,
 	}
 }
 
-func Ge(value any) Op {
+func Ge(field string, value any) Op {
 	return Op{
+		Field: field,
 		Value: value,
 		Type:  OpGe,
 	}
 }
 
-func Le(value any) Op {
+func Le(field string, value any) Op {
 	return Op{
+		Field: field,
 		Value: value,
 		Type:  OpLe,
 	}

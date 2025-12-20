@@ -262,37 +262,36 @@ func apply(maUn MarshalUnmarshaler, value any, o Op) (bool, error) {
 	}
 }
 
-func compare[T any](maUn MarshalUnmarshaler, a, b T) (int, error) {
-	var p any = pair[T]{first: a, second: b}
-	switch caseted := p.(type) {
-	case pair[int]:
-		return cmp.Compare(caseted.first, caseted.second), nil
-	case pair[int8]:
-		return cmp.Compare(caseted.first, caseted.second), nil
-	case pair[int16]:
-		return cmp.Compare(caseted.first, caseted.second), nil
-	case pair[int32]:
-		return cmp.Compare(caseted.first, caseted.second), nil
-	case pair[int64]:
-		return cmp.Compare(caseted.first, caseted.second), nil
-	case pair[uint]:
-		return cmp.Compare(caseted.first, caseted.second), nil
-	case pair[uint8]:
-		return cmp.Compare(caseted.first, caseted.second), nil
-	case pair[uint16]:
-		return cmp.Compare(caseted.first, caseted.second), nil
-	case pair[uint32]:
-		return cmp.Compare(caseted.first, caseted.second), nil
-	case pair[uint64]:
-		return cmp.Compare(caseted.first, caseted.second), nil
-	case pair[uintptr]:
-		return cmp.Compare(caseted.first, caseted.second), nil
-	case pair[float32]:
-		return cmp.Compare(caseted.first, caseted.second), nil
-	case pair[float64]:
-		return cmp.Compare(caseted.first, caseted.second), nil
-	case pair[string]:
-		return cmp.Compare(caseted.first, caseted.second), nil
+func compare(maUn MarshalUnmarshaler, a, b any) (int, error) {
+	switch va := a.(type) {
+	case int:
+		return cmp.Compare(va, b.(int)), nil
+	case int8:
+		return cmp.Compare(va, b.(int8)), nil
+	case int16:
+		return cmp.Compare(va, b.(int16)), nil
+	case int32:
+		return cmp.Compare(va, b.(int32)), nil
+	case int64:
+		return cmp.Compare(va, b.(int64)), nil
+	case uint:
+		return cmp.Compare(va, b.(uint)), nil
+	case uint8:
+		return cmp.Compare(va, b.(uint8)), nil
+	case uint16:
+		return cmp.Compare(va, b.(uint16)), nil
+	case uint32:
+		return cmp.Compare(va, b.(uint32)), nil
+	case uint64:
+		return cmp.Compare(va, b.(uint64)), nil
+	case uintptr:
+		return cmp.Compare(va, b.(uintptr)), nil
+	case float32:
+		return cmp.Compare(va, b.(float32)), nil
+	case float64:
+		return cmp.Compare(va, b.(float64)), nil
+	case string:
+		return cmp.Compare(va, b.(string)), nil
 	default:
 		ba, err := maUn.Marshal(a)
 		if err != nil {
@@ -302,11 +301,7 @@ func compare[T any](maUn MarshalUnmarshaler, a, b T) (int, error) {
 		if err != nil {
 			return 0, fmt.Errorf("failed to marshal value for comparison: %v", err)
 		}
-		return bytes.Compare(ba, bb), nil
+		res := bytes.Compare(ba, bb)
+		return res, nil
 	}
-}
-
-type pair[T any] struct {
-	first  T
-	second T
 }

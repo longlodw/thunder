@@ -83,11 +83,7 @@ func TestQuery_Basic(t *testing.T) {
 	// Execute Select on the Query
 	// Filter by username 'alice'
 	// Use explicit struct to control type (string vs []any)
-	op := Op{
-		Field: "username",
-		Type:  OpEq,
-		Value: "alice",
-	}
+	op := Eq("username", "alice")
 	seq, err := q.Select(op)
 	if err != nil {
 		t.Fatal(err)

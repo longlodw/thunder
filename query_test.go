@@ -69,7 +69,7 @@ func TestQuery_Basic(t *testing.T) {
 
 	// Define a query that joins users and departments
 	// We want to find users in 'engineering' and their location
-	q, err := tx.CreateQuery([]string{"id", "username", "department", "location"})
+	q, err := tx.CreateQuery("agg", []string{"id", "username", "department", "location"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -16,15 +16,31 @@ type Query struct {
 	explored map[string]bool
 	parent   []*queryParent
 	columns  []string
+	name     string
 }
 
-func newQuery(tx *Tx, columns []string) *Query {
+func newQuery(tx *Tx, name string, columns []string, recursive bool) (*Query, error) {
+	var backing *Persistent
+	var err error
+	if recursive {
+		backing, err = tx.CreatePersistent(
+			fmt.Sprintf("query_backing_%s_%d", name, tx.ID()),
+			columns,
+			map[string][]string{},
+		)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return &Query{
 		tx:       tx,
 		bodies:   make([]queryBody, 0),
+		backing:  backing,
 		explored: make(map[string]bool),
+		parent:   make([]*queryParent, 0),
 		columns:  columns,
-	}
+		name:     name,
+	}, nil
 }
 
 type QueryProjection struct {
@@ -66,6 +82,10 @@ func (q *Query) AddBody(body ...Selector) error {
 	return nil
 }
 
+func (q *Query) Name() string {
+	return q.name
+}
+
 func (q *Query) Columns() []string {
 	return slices.Clone(q.columns)
 }
@@ -87,21 +107,25 @@ func (q *Query) Project(mapping map[string]string) (Selector, error) {
 }
 
 func (q *Query) Select(ops ...Op) (iter.Seq2[map[string]any, error], error) {
-	if q.backing == nil {
-		tempRelation := fmt.Sprintf("tmp_query_%d", q.tx.ID())
-		indexes := make(map[string][]string)
-		p, err := q.tx.CreatePersistent(tempRelation, q.columns, indexes)
-		if err != nil {
-			return nil, err
-		}
-		q.backing = p
-	}
-
 	err := q.explore(ops...)
 	if err != nil {
 		return nil, err
 	}
-	return q.backing.Select(ops...)
+	if q.backing != nil {
+		return q.backing.Select(ops...)
+	}
+	return func(yield func(map[string]any, error) bool) {
+		for _, body := range q.bodies {
+			iterEntries, err := body.join(0, map[string]any{}, -1, ops)
+			if err != nil {
+				if !yield(nil, err) {
+					return
+				}
+				continue
+			}
+			iterEntries(yield)
+		}
+	}, nil
 }
 
 func (q *Query) explore(ops ...Op) error {
@@ -146,7 +170,7 @@ func (q *Query) explore(ops ...Op) error {
 						if err != nil {
 							return err
 						}
-						stack = append(stack, upStackItem{part: part, value: e, index: 0})
+						stack = append(stack, upStackItem{part: part, value: e, index: 0, ops: v.ops})
 					}
 				case *Query:
 					stack = append(stack, downStackItem{part: node, ops: matchedOps, requireUp: node.backing != nil || v.requireUp})
@@ -159,7 +183,7 @@ func (q *Query) explore(ops ...Op) error {
 		case upStackItem:
 			switch part := v.part.(type) {
 			case *queryBody:
-				iterJoined, err := part.join(part.headIndex, v.value, v.index)
+				iterJoined, err := part.join(0, v.value, v.index, v.ops)
 				if err != nil {
 					return err
 				}
@@ -169,7 +193,7 @@ func (q *Query) explore(ops ...Op) error {
 					}
 					if part.head != nil {
 						// Propagate up to the head Query
-						stack = append(stack, upStackItem{part: part.head, value: joinedEntry, index: part.headIndex})
+						stack = append(stack, upStackItem{part: part.head, value: joinedEntry, index: part.headIndex, ops: v.ops})
 					}
 				}
 			case *Query:
@@ -179,7 +203,7 @@ func (q *Query) explore(ops ...Op) error {
 					}
 				}
 				for _, parent := range part.parent {
-					stack = append(stack, upStackItem{part: parent.body, value: v.value, index: parent.index})
+					stack = append(stack, upStackItem{part: parent.body, value: v.value, index: parent.index, ops: v.ops})
 				}
 			case *QueryProjection:
 				mappedValue := make(map[string]any)
@@ -188,7 +212,7 @@ func (q *Query) explore(ops ...Op) error {
 						mappedValue[toKey] = val
 					}
 				}
-				stack = append(stack, upStackItem{part: v.part.(*QueryProjection).base, value: mappedValue, index: 0})
+				stack = append(stack, upStackItem{part: v.part.(*QueryProjection).base, value: mappedValue, index: 0, ops: v.ops})
 			}
 		}
 	}
@@ -205,31 +229,38 @@ type upStackItem struct {
 	part  any
 	value map[string]any
 	index int
+	ops   []Op
 }
 
-func (qb *queryBody) join(curIdx int, e map[string]any, skipIdx int) (iter.Seq2[map[string]any, error], error) {
+func (qb *queryBody) join(curIdx int, e map[string]any, skipIdx int, ops []Op) (iter.Seq2[map[string]any, error], error) {
 	if curIdx >= len(qb.body) {
 		return func(yield func(map[string]any, error) bool) {
 			yield(e, nil)
 		}, nil
 	}
 	if curIdx == skipIdx {
-		return qb.join(curIdx+1, e, skipIdx)
+		return qb.join(curIdx+1, e, skipIdx, ops)
 	}
 	selectable := qb.body[curIdx]
 	columns := selectable.Columns()
-	ops := make([]Op, 0, len(columns))
+	joinOps := make([]Op, 0, len(columns)+len(ops))
 	for _, col := range columns {
 		if val, ok := e[col]; ok {
-			ops = append(ops, Op{
+			joinOps = append(joinOps, Op{
 				Field: col,
 				Type:  OpEq,
 				Value: val,
 			})
 		}
 	}
+	// Add external ops that apply to this selectable
+	for _, op := range ops {
+		if slices.Contains(columns, op.Field) {
+			joinOps = append(joinOps, op)
+		}
+	}
 
-	iterEntries, err := selectable.Select(ops...)
+	iterEntries, err := selectable.Select(joinOps...)
 	if err != nil {
 		return nil, err
 	}
@@ -243,7 +274,7 @@ func (qb *queryBody) join(curIdx int, e map[string]any, skipIdx int) (iter.Seq2[
 			}
 			merged := maps.Clone(e)
 			maps.Copy(merged, en)
-			iterJoined, err := qb.join(curIdx+1, merged, skipIdx)
+			iterJoined, err := qb.join(curIdx+1, merged, skipIdx, ops)
 			if err != nil {
 				if !yield(nil, err) {
 					return

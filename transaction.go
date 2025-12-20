@@ -156,6 +156,6 @@ func (tx *Tx) DeletePersistent(relation string) error {
 	return nil
 }
 
-func (tx *Tx) CreateQuery(columns []string) (*Query, error) {
-	return newQuery(tx, columns), nil
+func (tx *Tx) CreateQuery(name string, columns []string, recursive bool) (*Query, error) {
+	return newQuery(tx, name, columns, recursive)
 }

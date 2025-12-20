@@ -107,11 +107,11 @@ func (q *Query) Project(mapping map[string]string) (Selector, error) {
 }
 
 func (q *Query) Select(ops ...Op) (iter.Seq2[map[string]any, error], error) {
-	err := q.explore(ops...)
-	if err != nil {
-		return nil, err
-	}
 	if q.backing != nil {
+		err := q.explore(ops...)
+		if err != nil {
+			return nil, err
+		}
 		return q.backing.Select(ops...)
 	}
 	return func(yield func(map[string]any, error) bool) {
@@ -138,7 +138,8 @@ func (q *Query) explore(ops ...Op) error {
 			switch part := v.part.(type) {
 			case *Query:
 				key := hashOperators(v.ops...)
-				if part.explored[key] {
+				// no need to explore again or there is no backing (meaning the query is not recursive)
+				if part.backing == nil || part.explored[key] {
 					continue
 				}
 				part.explored[key] = true

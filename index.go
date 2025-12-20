@@ -94,12 +94,12 @@ func (idx *indexStorage) get(operator OpType, name string, keyParts []any) (iter
 			c := idxBk.Cursor()
 			for k, _ := c.First(); k != nil && bytes.Compare(k, key) < 0; k, _ = c.Next() {
 				bk := idxBk.Bucket(k)
-				if bk != nil {
+				if bk == nil {
 					continue
 				}
 				c2 := bk.Cursor()
 				for k2, v2 := c2.First(); k2 != nil; k2, v2 = c2.Next() {
-					if v2 != nil && !yield(k2) {
+					if v2 != nil && !yield(v2) {
 						return
 					}
 				}
@@ -121,12 +121,12 @@ func (idx *indexStorage) get(operator OpType, name string, keyParts []any) (iter
 			c.Seek(key)
 			for k, _ := c.Next(); k != nil; k, _ = c.Next() {
 				bk := idxBk.Bucket(k)
-				if bk != nil {
+				if bk == nil {
 					continue
 				}
 				c2 := bk.Cursor()
 				for k2, v2 := c2.First(); k2 != nil; k2, v2 = c2.Next() {
-					if v2 != nil && !yield(k2) {
+					if v2 != nil && !yield(v2) {
 						return
 					}
 				}

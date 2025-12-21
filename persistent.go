@@ -15,6 +15,7 @@ type Persistent struct {
 	indexes     *indexStorage
 	reverseIdx  *reverseIndexStorage
 	indexesMeta map[string][]string
+	uniquesMeta map[string][]string
 	columns     []string
 	relation    string
 	maUn        MarshalUnmarshaler
@@ -33,10 +34,35 @@ func (pr *Persistent) Insert(obj map[string]any) error {
 	if err != nil {
 		return err
 	}
+	// Check uniques
+	for uniqueName, keyFields := range pr.uniquesMeta {
+		keyParts := make([]any, len(keyFields))
+		for i, kf := range keyFields {
+			keyParts[i] = obj[kf]
+		}
+		exists, err := pr.indexes.get(OpEq, uniqueName, keyParts)
+		if err != nil {
+			return err
+		}
+		for _ = range exists {
+			return fmt.Errorf("unique constraint violation on index %s", uniqueName)
+		}
+	}
 
 	// Update indexes
 	revIdx := make(map[string][]byte)
 	for idxName, keyFields := range pr.indexesMeta {
+		keyParts := make([]any, len(keyFields))
+		for i, kf := range keyFields {
+			keyParts[i] = obj[kf]
+		}
+		revIdxField, err := pr.indexes.insert(idxName, keyParts, id)
+		if err != nil {
+			return err
+		}
+		revIdx[idxName] = revIdxField
+	}
+	for idxName, keyFields := range pr.uniquesMeta {
 		keyParts := make([]any, len(keyFields))
 		for i, kf := range keyFields {
 			keyParts[i] = obj[kf]
@@ -123,7 +149,9 @@ func (pr *Persistent) iter(ops ...Op) (iter.Seq2[entry, error], error) {
 	indexCount := 0
 	nonIndexedOps := make([]Op, 0, len(ops))
 	for _, op := range ops {
-		if _, ok := pr.indexesMeta[op.Field]; !ok {
+		_, okUnique := pr.uniquesMeta[op.Field]
+		_, okIndex := pr.indexesMeta[op.Field]
+		if !(okUnique || okIndex) {
 			nonIndexedOps = append(nonIndexedOps, op)
 			if !slices.Contains(pr.columns, op.Field) {
 				return nil, fmt.Errorf("field %s not found in columns", op.Field)
@@ -133,15 +161,13 @@ func (pr *Persistent) iter(ops ...Op) (iter.Seq2[entry, error], error) {
 		indexCount++
 		values, ok := op.Value.([]any)
 		if !ok {
-			// If not a slice, assume single value and wrap it if it's a single-column index
-			// We need to check if index is single column?
-			// indexesMeta[op.Field] returns columns.
-			idxCols := pr.indexesMeta[op.Field]
-			if len(idxCols) == 1 {
-				values = []any{op.Value}
-			} else {
-				return nil, fmt.Errorf("operation value must be a slice for composite index %s", op.Field)
-			}
+			values = []any{op.Value}
+		}
+		if okUnique && !(len(pr.uniquesMeta[op.Field]) == len(values)) {
+			return nil, fmt.Errorf("unique index %s requires %d values, got %d", op.Field, len(pr.uniquesMeta[op.Field]), len(values))
+		}
+		if okIndex && !(len(pr.indexesMeta[op.Field]) == len(values)) {
+			return nil, fmt.Errorf("index %s requires %d values, got %d", op.Field, len(pr.indexesMeta[op.Field]), len(values))
 		}
 		iterIds, err := pr.indexes.get(op.Type, op.Field, values)
 		if err != nil {
@@ -163,26 +189,12 @@ func (pr *Persistent) iter(ops ...Op) (iter.Seq2[entry, error], error) {
 					}
 					continue
 				}
-
-				matches := true
-				for _, op := range nonIndexedOps {
-					fieldValue, ok := value[op.Field]
-					if !ok {
-						matches = false
-						break
+				matches, err := pr.matchOps(value, nonIndexedOps)
+				if err != nil {
+					if !yield(entry{}, err) {
+						return
 					}
-					match, err := apply(pr.maUn, fieldValue, op)
-					if err != nil {
-						if !yield(entry{}, err) {
-							return
-						}
-						matches = false
-						break
-					}
-					if !match {
-						matches = false
-						break
-					}
+					continue
 				}
 				if matches && !yield(entry{
 					id:    k,
@@ -206,25 +218,12 @@ func (pr *Persistent) iter(ops ...Op) (iter.Seq2[entry, error], error) {
 				}
 				continue
 			}
-			matches := true
-			for _, op := range nonIndexedOps {
-				fieldValue, ok := value[op.Field]
-				if !ok {
-					matches = false
-					break
+			matches, err := pr.matchOps(value, nonIndexedOps)
+			if err != nil {
+				if !yield(entry{}, err) {
+					return
 				}
-				match, err := apply(pr.maUn, fieldValue, op)
-				if err != nil {
-					if !yield(entry{}, err) {
-						return
-					}
-					matches = false
-					break
-				}
-				if !match {
-					matches = false
-					break
-				}
+				continue
 			}
 			if matches && !yield(entry{
 				id:    idBytes,
@@ -234,6 +233,23 @@ func (pr *Persistent) iter(ops ...Op) (iter.Seq2[entry, error], error) {
 			}
 		}
 	}, nil
+}
+
+func (pr *Persistent) matchOps(value map[string]any, ops []Op) (bool, error) {
+	for _, op := range ops {
+		fieldValue, ok := value[op.Field]
+		if !ok {
+			return false, fmt.Errorf("field %s not found in object", op.Field)
+		}
+		match, err := apply(pr.maUn, fieldValue, op)
+		if err != nil {
+			return false, err
+		}
+		if !match {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func apply(maUn MarshalUnmarshaler, value any, o Op) (bool, error) {

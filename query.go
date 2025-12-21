@@ -27,6 +27,9 @@ func newQuery(tx *Tx, name string, columns []string, recursive bool) (*Query, er
 			fmt.Sprintf("query_backing_%s_%d", name, tx.ID()),
 			columns,
 			map[string][]string{},
+			map[string][]string{
+				"unique_all": columns,
+			},
 		)
 		if err != nil {
 			return nil, err

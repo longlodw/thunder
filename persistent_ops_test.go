@@ -22,7 +22,7 @@ func TestPersistent_AllOperators(t *testing.T) {
 		"indexed_val": {"indexed_val"},
 	}
 
-	p, err := tx.CreatePersistent(relation, columns, indexes)
+	p, err := tx.CreatePersistent(relation, columns, indexes, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

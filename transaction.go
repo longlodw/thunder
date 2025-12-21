@@ -39,6 +39,7 @@ func (tx *Tx) CreatePersistent(
 	relation string,
 	columns []string,
 	indexes map[string][]string,
+	uniques map[string][]string,
 ) (*Persistent, error) {
 	tnx := tx.tx
 	maUn := tx.maUn
@@ -66,11 +67,25 @@ func (tx *Tx) CreatePersistent(
 			}
 		}
 	}
+	for _, cols := range uniques {
+		for _, col := range cols {
+			if !slices.Contains(columns, col) {
+				return nil, fmt.Errorf("unique column %s not found in columns", col)
+			}
+		}
+	}
 	indexesBytes, err := maUn.Marshal(indexes)
 	if err != nil {
 		return nil, err
 	}
 	if err := metaBucket.Put([]byte("indexes"), indexesBytes); err != nil {
+		return nil, err
+	}
+	uniquesBytes, err := maUn.Marshal(uniques)
+	if err != nil {
+		return nil, err
+	}
+	if err := metaBucket.Put([]byte("uniques"), uniquesBytes); err != nil {
 		return nil, err
 	}
 	indexesStore, err := newIndex(bucket, maUn)
@@ -123,6 +138,11 @@ func (tx *Tx) LoadPersistent(
 	if err := maUn.Unmarshal(indexesBytes, &indexes); err != nil {
 		return nil, err
 	}
+	uniquesBytes := metaBucket.Get([]byte("uniques"))
+	var uniques map[string][]string
+	if err := maUn.Unmarshal(uniquesBytes, &uniques); err != nil {
+		return nil, err
+	}
 
 	indexesStore, err := loadIndex(bucket, maUn)
 	if err != nil {
@@ -142,6 +162,7 @@ func (tx *Tx) LoadPersistent(
 		indexes:     indexesStore,
 		reverseIdx:  reverseIdxStore,
 		indexesMeta: indexes,
+		uniquesMeta: uniques,
 		columns:     columns,
 		relation:    relation,
 		maUn:        maUn,

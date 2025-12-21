@@ -53,7 +53,7 @@ func basicCRUD_Insert(t *testing.T, db *DB) {
 		"username": {"username"},
 	}
 
-	p, err := tx.CreatePersistent(relation, columns, indexes)
+	p, err := tx.CreatePersistent(relation, columns, indexes, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func nonIndexed_Insert(t *testing.T, db *DB) {
 	columns := []string{"id", "price"}
 	indexes := map[string][]string{}
 
-	p, err := tx.CreatePersistent(relation, columns, indexes)
+	p, err := tx.CreatePersistent(relation, columns, indexes, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +251,7 @@ func projection_Insert(t *testing.T, db *DB) {
 		"username": {"username"},
 	}
 
-	p, err := tx.CreatePersistent(relation, columns, indexes)
+	p, err := tx.CreatePersistent(relation, columns, indexes, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,7 +329,7 @@ func TestPersistent_DifferentOperators(t *testing.T) {
 	columns := []string{"id", "price", "stock"}
 	indexes := map[string][]string{} // Non-indexed for operator tests
 
-	p, err := tx.CreatePersistent(relation, columns, indexes)
+	p, err := tx.CreatePersistent(relation, columns, indexes, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -448,7 +448,7 @@ func TestPersistent_ComplexTypes(t *testing.T) {
 	columns := []string{"id", "data", "tags"}
 	indexes := map[string][]string{}
 
-	p, err := tx.CreatePersistent(relation, columns, indexes)
+	p, err := tx.CreatePersistent(relation, columns, indexes, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -589,7 +589,7 @@ func TestPersistent_CompositeIndex(t *testing.T) {
 		"name": {"first", "last"},
 	}
 
-	p, err := tx.CreatePersistent(relation, columns, indexes)
+	p, err := tx.CreatePersistent(relation, columns, indexes, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

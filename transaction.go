@@ -40,6 +40,12 @@ func (tx *Tx) CreatePersistent(
 	indexes map[string][]string,
 	uniques map[string][]string,
 ) (*Persistent, error) {
+	if indexes == nil {
+		indexes = make(map[string][]string)
+	}
+	if uniques == nil {
+		uniques = make(map[string][]string)
+	}
 	tnx := tx.tx
 	maUn := tx.maUn
 	bucket, err := tnx.CreateBucketIfNotExists([]byte(relation))
@@ -87,7 +93,7 @@ func (tx *Tx) CreatePersistent(
 	if err := metaBucket.Put([]byte("uniques"), uniquesBytes); err != nil {
 		return nil, err
 	}
-	indexesStore, err := newIndex(bucket, maUn)
+	indexesStore, err := newIndex(bucket)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +114,6 @@ func (tx *Tx) CreatePersistent(
 		uniquesMeta: uniques,
 		columns:     columns,
 		relation:    relation,
-		maUn:        maUn,
 	}, nil
 }
 
@@ -144,7 +149,7 @@ func (tx *Tx) LoadPersistent(
 		return nil, err
 	}
 
-	indexesStore, err := loadIndex(bucket, maUn)
+	indexesStore, err := loadIndex(bucket)
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +170,6 @@ func (tx *Tx) LoadPersistent(
 		uniquesMeta: uniques,
 		columns:     columns,
 		relation:    relation,
-		maUn:        maUn,
 	}, nil
 }
 

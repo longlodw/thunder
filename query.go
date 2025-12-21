@@ -228,6 +228,10 @@ func (q *Query) explore(ops ...Op) error {
 			case *Query:
 				if part.backing != nil {
 					if err := part.backing.Insert(v.value); err != nil {
+						if err.Error() == ErrUniqueConstraint("unique_all").Error() {
+							// Ignore unique constraint violations
+							continue
+						}
 						return err
 					}
 				}

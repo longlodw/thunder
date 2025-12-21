@@ -33,4 +33,5 @@ var (
 		return fmt.Errorf("index %s requires %d values, got %d", field, expected, got)
 	}
 	ErrFieldNotFoundInObject = func(field string) error { return fmt.Errorf("field %s not found in object", field) }
+	ErrCannotMarshal         = func(v any) error { return fmt.Errorf("cannot marshal value '%v' of type %T", v, v) }
 )

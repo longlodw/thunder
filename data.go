@@ -42,7 +42,7 @@ func (d *dataStorage) insert(value any) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	idBytes, err := d.maUn.Marshal(id)
+	idBytes, err := orderedMa.Marshal(id)
 	if err != nil {
 		return nil, err
 	}

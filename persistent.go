@@ -17,7 +17,6 @@ type Persistent struct {
 	uniquesMeta map[string][]string
 	columns     []string
 	relation    string
-	maUn        MarshalUnmarshaler
 }
 
 func (pr *Persistent) Insert(obj map[string]any) error {
@@ -43,7 +42,7 @@ func (pr *Persistent) Insert(obj map[string]any) error {
 		if err != nil {
 			return err
 		}
-		for _ = range exists {
+		for range exists {
 			return ErrUniqueConstraint(uniqueName)
 		}
 	}
@@ -240,7 +239,7 @@ func (pr *Persistent) matchOps(value map[string]any, ops []Op) (bool, error) {
 		if !ok {
 			return false, ErrFieldNotFoundInObject(op.Field)
 		}
-		match, err := apply(pr.maUn, fieldValue, op)
+		match, err := apply(fieldValue, op)
 		if err != nil {
 			return false, err
 		}
@@ -251,11 +250,11 @@ func (pr *Persistent) matchOps(value map[string]any, ops []Op) (bool, error) {
 	return true, nil
 }
 
-func apply(maUn MarshalUnmarshaler, value any, o Op) (bool, error) {
+func apply(value any, o Op) (bool, error) {
 	if reflect.TypeOf(value) != reflect.TypeOf(o.Value) {
 		return false, ErrTypeMismatch(value, o.Value)
 	}
-	v, err := compare(maUn, value, o.Value)
+	v, err := compare(value, o.Value)
 	if err != nil {
 		return false, err
 	}
@@ -277,7 +276,7 @@ func apply(maUn MarshalUnmarshaler, value any, o Op) (bool, error) {
 	}
 }
 
-func compare(maUn MarshalUnmarshaler, a, b any) (int, error) {
+func compare(a, b any) (int, error) {
 	switch va := a.(type) {
 	case int:
 		return cmp.Compare(va, b.(int)), nil
@@ -308,15 +307,14 @@ func compare(maUn MarshalUnmarshaler, a, b any) (int, error) {
 	case string:
 		return cmp.Compare(va, b.(string)), nil
 	default:
-		ba, err := maUn.Marshal(a)
+		ba, err := orderedMa.Marshal(a)
 		if err != nil {
-			return 0, ErrMarshalComparison(err)
+			return 0, err
 		}
-		bb, err := maUn.Marshal(b)
+		bb, err := orderedMa.Marshal(b)
 		if err != nil {
-			return 0, ErrMarshalComparison(err)
+			return 0, err
 		}
-		res := bytes.Compare(ba, bb)
-		return res, nil
+		return bytes.Compare(ba, bb), nil
 	}
 }

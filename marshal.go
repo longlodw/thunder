@@ -5,6 +5,7 @@ import (
 	"encoding/gob"
 	"encoding/json"
 	"github.com/vmihailenco/msgpack/v5"
+	"rsc.io/ordered"
 )
 
 type Marshaler interface {
@@ -24,6 +25,7 @@ var (
 	JsonMaUn    = jsonMarshalUnmarshaler{}
 	GobMaUn     = gobMarshalUnmarshaler{}
 	MsgpackMaUn = msgpackMarshalUnmarshaler{}
+	orderedMa   = orderedMarshaler{}
 )
 
 type jsonMarshalUnmarshaler struct{}
@@ -62,4 +64,21 @@ func (m *msgpackMarshalUnmarshaler) Marshal(v any) ([]byte, error) {
 
 func (m *msgpackMarshalUnmarshaler) Unmarshal(data []byte, v any) error {
 	return msgpack.Unmarshal(data, v)
+}
+
+type orderedMarshaler struct{}
+
+func (o *orderedMarshaler) Marshal(v any) ([]byte, error) {
+	switch val := v.(type) {
+	case []any:
+		if !ordered.CanEncode(val...) {
+			return nil, ErrCannotMarshal(v)
+		}
+		return ordered.Encode(val...), nil
+	default:
+		if !ordered.CanEncode(val) {
+			return nil, ErrCannotMarshal(v)
+		}
+		return ordered.Encode(val), nil
+	}
 }

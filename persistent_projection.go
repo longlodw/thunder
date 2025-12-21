@@ -1,7 +1,6 @@
 package thunder
 
 import (
-	"fmt"
 	"iter"
 	"maps"
 	"slices"
@@ -23,7 +22,7 @@ func newProjection(base Selector, fieldsMap map[string]string) (*Projection, err
 
 	for baseCol, projCol := range fieldsMap {
 		if !slices.Contains(baseColumns, baseCol) {
-			return nil, fmt.Errorf("column %s not found in base columns", baseCol)
+			return nil, ErrProjectionMissingCol(baseCol)
 		}
 		fromBase[baseCol] = projCol
 		toBase[projCol] = baseCol
@@ -45,7 +44,7 @@ func (p *Projection) Select(ops ...Op) (iter.Seq2[map[string]any, error], error)
 	for i, op := range ops {
 		adjustedField, ok := p.toBase[op.Field]
 		if !ok {
-			return nil, fmt.Errorf("field %s not found in projection", op.Field)
+			return nil, ErrProjectionMissingFld(op.Field)
 		}
 		adjustedOp := Op{
 			Type:  op.Type,
@@ -77,7 +76,7 @@ func (p *Projection) Project(mapping map[string]string) (Selector, error) {
 	for fromField, toField := range mapping {
 		baseField, ok := p.toBase[fromField]
 		if !ok {
-			return nil, fmt.Errorf("field %s not found in projection", fromField)
+			return nil, ErrProjectionMissingFld(fromField)
 		}
 		newMapping[baseField] = toField
 	}

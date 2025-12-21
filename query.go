@@ -72,7 +72,7 @@ func (q *Query) AddBody(body ...Selector) error {
 	// Check if all query columns are present in the body
 	for _, col := range q.columns {
 		if _, ok := columnsSet[col]; !ok {
-			return fmt.Errorf("body missing required column %s", col)
+			return ErrBodyMissingColumn(col)
 		}
 	}
 	newBody := &queryBody{
@@ -199,7 +199,7 @@ func (q *Query) explore(ops ...Op) error {
 						stack = append(stack, upStackItem{part: part, value: e, index: 0, ops: v.ops})
 					}
 				default:
-					return fmt.Errorf("unsupported selector type in query body: %T", node)
+					return ErrUnsupportedSelector(node)
 				}
 			}
 		case upStackItem:

@@ -3,7 +3,6 @@ package thunder
 import (
 	"bytes"
 	"cmp"
-	"fmt"
 	"iter"
 	"reflect"
 	"slices"
@@ -23,11 +22,11 @@ type Persistent struct {
 
 func (pr *Persistent) Insert(obj map[string]any) error {
 	if len(obj) != len(pr.columns) {
-		return fmt.Errorf("object has incorrect number of fields")
+		return ErrObjectFieldCountMismatch
 	}
 	for _, col := range pr.columns {
 		if _, ok := obj[col]; !ok {
-			return fmt.Errorf("object is missing field %s", col)
+			return ErrObjectMissingField(col)
 		}
 	}
 	id, err := pr.data.insert(obj)
@@ -45,7 +44,7 @@ func (pr *Persistent) Insert(obj map[string]any) error {
 			return err
 		}
 		for _ = range exists {
-			return fmt.Errorf("unique constraint violation on index %s", uniqueName)
+			return ErrUniqueConstraint(uniqueName)
 		}
 	}
 
@@ -96,7 +95,7 @@ func (pr *Persistent) Delete(ops ...Op) error {
 		for idxName, revIdxField := range revIdx {
 			keyFields, ok := pr.indexesMeta[idxName]
 			if !ok {
-				return fmt.Errorf("index metadata not found for index %s", idxName)
+				return ErrIndexMetadataNotFound(idxName)
 			}
 			keyParts := make([]any, len(keyFields))
 			for i, kf := range keyFields {
@@ -154,7 +153,7 @@ func (pr *Persistent) iter(ops ...Op) (iter.Seq2[entry, error], error) {
 		if !(okUnique || okIndex) {
 			nonIndexedOps = append(nonIndexedOps, op)
 			if !slices.Contains(pr.columns, op.Field) {
-				return nil, fmt.Errorf("field %s not found in columns", op.Field)
+				return nil, ErrFieldNotFoundInColumns(op.Field)
 			}
 			continue
 		}
@@ -164,10 +163,10 @@ func (pr *Persistent) iter(ops ...Op) (iter.Seq2[entry, error], error) {
 			values = []any{op.Value}
 		}
 		if okUnique && !(len(pr.uniquesMeta[op.Field]) == len(values)) {
-			return nil, fmt.Errorf("unique index %s requires %d values, got %d", op.Field, len(pr.uniquesMeta[op.Field]), len(values))
+			return nil, ErrUniqueIndexValueCount(op.Field, len(pr.uniquesMeta[op.Field]), len(values))
 		}
 		if okIndex && !(len(pr.indexesMeta[op.Field]) == len(values)) {
-			return nil, fmt.Errorf("index %s requires %d values, got %d", op.Field, len(pr.indexesMeta[op.Field]), len(values))
+			return nil, ErrIndexValueCount(op.Field, len(pr.indexesMeta[op.Field]), len(values))
 		}
 		iterIds, err := pr.indexes.get(op.Type, op.Field, values)
 		if err != nil {
@@ -239,7 +238,7 @@ func (pr *Persistent) matchOps(value map[string]any, ops []Op) (bool, error) {
 	for _, op := range ops {
 		fieldValue, ok := value[op.Field]
 		if !ok {
-			return false, fmt.Errorf("field %s not found in object", op.Field)
+			return false, ErrFieldNotFoundInObject(op.Field)
 		}
 		match, err := apply(pr.maUn, fieldValue, op)
 		if err != nil {
@@ -254,7 +253,7 @@ func (pr *Persistent) matchOps(value map[string]any, ops []Op) (bool, error) {
 
 func apply(maUn MarshalUnmarshaler, value any, o Op) (bool, error) {
 	if reflect.TypeOf(value) != reflect.TypeOf(o.Value) {
-		return false, fmt.Errorf("type mismatch: %T vs %T", value, o.Value)
+		return false, ErrTypeMismatch(value, o.Value)
 	}
 	v, err := compare(maUn, value, o.Value)
 	if err != nil {
@@ -274,7 +273,7 @@ func apply(maUn MarshalUnmarshaler, value any, o Op) (bool, error) {
 	case OpLe:
 		return v <= 0, nil
 	default:
-		return false, fmt.Errorf("unsupported operator: %d", o.Type)
+		return false, ErrUnsupportedOperator(o.Type)
 	}
 }
 
@@ -311,11 +310,11 @@ func compare(maUn MarshalUnmarshaler, a, b any) (int, error) {
 	default:
 		ba, err := maUn.Marshal(a)
 		if err != nil {
-			return 0, fmt.Errorf("failed to marshal value for comparison: %v", err)
+			return 0, ErrMarshalComparison(err)
 		}
 		bb, err := maUn.Marshal(b)
 		if err != nil {
-			return 0, fmt.Errorf("failed to marshal value for comparison: %v", err)
+			return 0, ErrMarshalComparison(err)
 		}
 		res := bytes.Compare(ba, bb)
 		return res, nil

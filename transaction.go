@@ -2,7 +2,6 @@ package thunder
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"slices"
 
@@ -63,14 +62,14 @@ func (tx *Tx) CreatePersistent(
 	for _, cols := range indexes {
 		for _, col := range cols {
 			if !slices.Contains(columns, col) {
-				return nil, fmt.Errorf("index column %s not found in columns", col)
+				return nil, ErrIndexColNotFound(col)
 			}
 		}
 	}
 	for _, cols := range uniques {
 		for _, col := range cols {
 			if !slices.Contains(columns, col) {
-				return nil, fmt.Errorf("unique column %s not found in columns", col)
+				return nil, ErrUniqueColNotFound(col)
 			}
 		}
 	}
@@ -106,6 +105,7 @@ func (tx *Tx) CreatePersistent(
 		indexes:     indexesStore,
 		reverseIdx:  reverseIdxStore,
 		indexesMeta: indexes,
+		uniquesMeta: uniques,
 		columns:     columns,
 		relation:    relation,
 		maUn:        maUn,

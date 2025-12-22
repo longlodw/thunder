@@ -82,64 +82,41 @@ func (idx *indexStorage) delete(name string, keyParts []any, seq []byte) error {
 	return bk.Delete(seq)
 }
 
-func (idx *indexStorage) get(operator OpType, name string, keyParts []any) (iter.Seq[[]byte], error) {
-	key, err := orderedMa.Marshal(keyParts)
-	if err != nil {
-		return nil, err
-	}
+func (idx *indexStorage) get(name string, kr *keyRange) (iter.Seq[[]byte], error) {
 	idxBk := idx.bucket.Bucket([]byte(name))
 	if idxBk == nil {
 		return nil, ErrIndexNotFound(name)
 	}
 	return func(yield func([]byte) bool) {
-		if operator&OpLt != 0 {
-			c := idxBk.Cursor()
-			k, _ := c.Seek(key)
-			if k == nil {
-				k, _ = c.Last()
-			} else {
-				k, _ = c.Prev()
-			}
-			for ; k != nil; k, _ = c.Prev() {
-				bk := idxBk.Bucket(k)
-				if bk == nil {
-					continue
-				}
-				c2 := bk.Cursor()
-				for k2, v2 := c2.First(); k2 != nil; k2, v2 = c2.Next() {
-					if v2 != nil && !yield(v2) {
-						return
-					}
-				}
-			}
+		c := idxBk.Cursor()
+		var startKey []byte
+		if kr.startKey != nil {
+			startKey, _ = c.Seek(kr.startKey)
+		} else {
+			startKey, _ = c.First()
 		}
-		if operator&OpEq != 0 {
-			bk := idxBk.Bucket(key)
-			if bk != nil {
-				c := bk.Cursor()
-				for k, v := c.First(); k != nil; k, v = c.Next() {
-					if v != nil && !yield(v) {
-						return
-					}
-				}
-			}
+		if !kr.includeStart {
+			startKey, _ = c.Next()
 		}
-		if operator&OpGt != 0 {
-			c := idxBk.Cursor()
-			k, _ := c.Seek(key)
-			if k != nil && bytes.Equal(k, key) {
-				k, _ = c.Next()
+		lessThanEnd := func(k []byte) bool {
+			if kr.endKey == nil {
+				return true
 			}
-			for ; k != nil; k, _ = c.Next() {
-				bk := idxBk.Bucket(k)
-				if bk == nil {
-					continue
-				}
-				c2 := bk.Cursor()
-				for k2, v2 := c2.First(); k2 != nil; k2, v2 = c2.Next() {
-					if v2 != nil && !yield(v2) {
-						return
-					}
+			cmpEnd := bytes.Compare(k, kr.endKey)
+			return cmpEnd < 0 || (cmpEnd == 0 && kr.includeEnd)
+		}
+		for k := startKey; k != nil && lessThanEnd(k); k, _ = c.Next() {
+			if kr.doesExclude(k) {
+				continue
+			}
+			curBucket := idxBk.Bucket(k)
+			if curBucket == nil {
+				continue
+			}
+			bc := curBucket.Cursor()
+			for ik, iv := bc.First(); ik != nil; ik, iv = bc.Next() {
+				if !yield(iv) {
+					return
 				}
 			}
 		}

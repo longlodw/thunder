@@ -112,6 +112,13 @@ func (tx *Tx) CreatePersistent(
 	if err != nil {
 		return nil, err
 	}
+	allIndexes := make([]string, 0, len(indexes)+len(uniques))
+	for idxName := range indexes {
+		allIndexes = append(allIndexes, idxName)
+	}
+	for uniqueName := range uniques {
+		allIndexes = append(allIndexes, uniqueName)
+	}
 
 	return &Persistent{
 		data:        dataStore,
@@ -121,6 +128,7 @@ func (tx *Tx) CreatePersistent(
 		uniquesMeta: uniques,
 		columns:     columns,
 		relation:    relation,
+		allIndexes:  allIndexes,
 	}, nil
 }
 
@@ -168,6 +176,13 @@ func (tx *Tx) LoadPersistent(
 	if err != nil {
 		return nil, err
 	}
+	allIndexes := make([]string, 0, len(indexes)+len(uniques))
+	for idxName := range indexes {
+		allIndexes = append(allIndexes, idxName)
+	}
+	for uniqueName := range uniques {
+		allIndexes = append(allIndexes, uniqueName)
+	}
 
 	return &Persistent{
 		data:        dataStore,
@@ -177,6 +192,7 @@ func (tx *Tx) LoadPersistent(
 		uniquesMeta: uniques,
 		columns:     columns,
 		relation:    relation,
+		allIndexes:  allIndexes,
 	}, nil
 }
 

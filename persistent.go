@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"iter"
+	"maps"
 	"reflect"
 	"slices"
 )
@@ -17,6 +18,7 @@ type Persistent struct {
 	uniquesMeta map[string][]string
 	columns     []string
 	relation    string
+	allIndexes  []string
 }
 
 func (pr *Persistent) Insert(obj map[string]any) error {
@@ -38,7 +40,12 @@ func (pr *Persistent) Insert(obj map[string]any) error {
 		for i, kf := range keyFields {
 			keyParts[i] = obj[kf]
 		}
-		exists, err := pr.indexes.get(OpEq, uniqueName, keyParts)
+		idxRanges, err := toRanges(Eq(uniqueName, keyParts))
+		if err != nil {
+			return err
+		}
+		idxRange := idxRanges[uniqueName]
+		exists, err := pr.indexes.get(uniqueName, idxRange)
 		if err != nil {
 			return err
 		}
@@ -143,107 +150,135 @@ func (pr *Persistent) Project(mapping map[string]string) (Selector, error) {
 }
 
 func (pr *Persistent) iter(ops ...Op) (iter.Seq2[entry, error], error) {
-	idsSet := make(map[string]int)
-	indexCount := 0
-	nonIndexedOps := make([]Op, 0, len(ops))
-	for _, op := range ops {
-		_, okUnique := pr.uniquesMeta[op.Field]
-		_, okIndex := pr.indexesMeta[op.Field]
-		if !(okUnique || okIndex) {
-			nonIndexedOps = append(nonIndexedOps, op)
-			if !slices.Contains(pr.columns, op.Field) {
-				return nil, ErrFieldNotFoundInColumns(op.Field)
-			}
-			continue
+	ranges, err := toRanges(ops...)
+	if err != nil {
+		return nil, err
+	}
+	selectedIndexes := make([]string, 0, len(ranges))
+	for _, idxName := range pr.allIndexes {
+		if _, ok := ranges[idxName]; ok {
+			selectedIndexes = append(selectedIndexes, idxName)
 		}
-		indexCount++
-		values, ok := op.Value.([]any)
-		if !ok {
-			values = []any{op.Value}
-		}
-		if okUnique && !(len(pr.uniquesMeta[op.Field]) == len(values)) {
-			return nil, ErrUniqueIndexValueCount(op.Field, len(pr.uniquesMeta[op.Field]), len(values))
-		}
-		if okIndex && !(len(pr.indexesMeta[op.Field]) == len(values)) {
-			return nil, ErrIndexValueCount(op.Field, len(pr.indexesMeta[op.Field]), len(values))
-		}
-		iterIds, err := pr.indexes.get(op.Type, op.Field, values)
+	}
+	if len(selectedIndexes) == 0 {
+		// No indexes defined, full scan
+		entries, err := pr.data.get(&keyRange{
+			includeEnd:   true,
+			includeStart: true,
+		})
 		if err != nil {
 			return nil, err
 		}
-		for idBytes := range iterIds {
-			idStr := string(idBytes)
-			idsSet[idStr]++
-		}
-	}
-	return func(yield func(entry, error) bool) {
-		if indexCount == 0 {
-			c := pr.data.bucket.Cursor()
-			for k, v := c.First(); k != nil; k, v = c.Next() {
-				var value map[string]any
-				if err := pr.data.maUn.Unmarshal(v, &value); err != nil {
-					if !yield(entry{}, err) {
-						return
-					}
-					continue
-				}
-				matches, err := pr.matchOps(value, nonIndexedOps)
+		return func(yield func(entry, error) bool) {
+			for e, err := range entries {
 				if err != nil {
 					if !yield(entry{}, err) {
 						return
 					}
 					continue
 				}
-				if matches && !yield(entry{
-					id:    k,
-					value: value,
-				}, nil) {
+				matches, err := pr.matchOps(e.value, ranges)
+				if err != nil {
+					if !yield(entry{}, err) {
+						return
+					}
+					continue
+				}
+				if matches && !yield(e, nil) {
 					return
 				}
 			}
-			return
-		}
-
-		for idStr, count := range idsSet {
-			if count != indexCount {
-				continue
-			}
-			idBytes := []byte(idStr)
-			value, err := pr.data.get(idBytes)
+		}, nil
+	}
+	shortestRangeIdxName := slices.MinFunc(selectedIndexes, func(a, b string) int {
+		distA := ranges[a].distance()
+		distB := ranges[b].distance()
+		return bytes.Compare(distA, distB)
+	})
+	rangeIdx := ranges[shortestRangeIdxName]
+	idxes, err := pr.indexes.get(shortestRangeIdxName, rangeIdx)
+	if err != nil {
+		return nil, err
+	}
+	return func(yield func(entry, error) bool) {
+		for idBytes := range idxes {
+			id := idBytes
+			values, err := pr.data.get(&keyRange{
+				includeEnd:   true,
+				includeStart: true,
+				startKey:     id,
+				endKey:       id,
+			})
 			if err != nil {
 				if !yield(entry{}, err) {
 					return
 				}
 				continue
 			}
-			matches, err := pr.matchOps(value, nonIndexedOps)
-			if err != nil {
-				if !yield(entry{}, err) {
+			for e, err := range values {
+				if err != nil {
+					if !yield(entry{}, err) {
+						return
+					}
+					continue
+				}
+				// Match other ops
+				matches, err := pr.matchOps(e.value, ranges)
+				if err != nil {
+					if !yield(entry{}, err) {
+						return
+					}
+					continue
+				}
+				if matches && !yield(e, nil) {
 					return
 				}
-				continue
-			}
-			if matches && !yield(entry{
-				id:    idBytes,
-				value: value,
-			}, nil) {
-				return
 			}
 		}
 	}, nil
 }
 
-func (pr *Persistent) matchOps(value map[string]any, ops []Op) (bool, error) {
-	for _, op := range ops {
-		fieldValue, ok := value[op.Field]
-		if !ok {
-			return false, ErrFieldNotFoundInObject(op.Field)
+func (pr *Persistent) matchOps(value map[string]any, keyRanges map[string]*keyRange) (bool, error) {
+	compositeValue := maps.Clone(value)
+	for k := range keyRanges {
+		_, ok := value[k]
+		if ok {
+			continue
 		}
-		match, err := apply(fieldValue, op)
+		if cols, ok := pr.indexesMeta[k]; ok {
+			parts := make([]any, len(cols))
+			for i, col := range cols {
+				part, ok := value[col]
+				if !ok {
+					return false, ErrObjectMissingField(col)
+				}
+				parts[i] = part
+			}
+			compositeValue[k] = parts
+		} else if cols, ok := pr.uniquesMeta[k]; ok {
+			parts := make([]any, len(cols))
+			for i, col := range cols {
+				part, ok := value[col]
+				if !ok {
+					return false, ErrObjectMissingField(col)
+				}
+				parts[i] = part
+			}
+			compositeValue[k] = parts
+		} else {
+			return false, ErrFieldNotFoundInColumns(k)
+		}
+	}
+	for name, r := range keyRanges {
+		v, ok := compositeValue[name]
+		if !ok {
+			return false, ErrObjectMissingField(name)
+		}
+		vBytes, err := orderedMa.Marshal(v)
 		if err != nil {
 			return false, err
 		}
-		if !match {
+		if !r.contains(vBytes) {
 			return false, nil
 		}
 	}

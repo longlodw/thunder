@@ -2,10 +2,7 @@ package thunder
 
 import (
 	"bytes"
-	"cmp"
 	"iter"
-	"maps"
-	"reflect"
 	"slices"
 )
 
@@ -177,7 +174,7 @@ func (pr *Persistent) iter(ops ...Op) (iter.Seq2[entry, error], error) {
 					}
 					continue
 				}
-				matches, err := pr.matchOps(e.value, ranges)
+				matches, err := pr.matchOps(e.value, ranges, "")
 				if err != nil {
 					if !yield(entry{}, err) {
 						return
@@ -223,7 +220,7 @@ func (pr *Persistent) iter(ops ...Op) (iter.Seq2[entry, error], error) {
 					continue
 				}
 				// Match other ops
-				matches, err := pr.matchOps(e.value, ranges)
+				matches, err := pr.matchOps(e.value, ranges, shortestRangeIdxName)
 				if err != nil {
 					if !yield(entry{}, err) {
 						return
@@ -238,9 +235,12 @@ func (pr *Persistent) iter(ops ...Op) (iter.Seq2[entry, error], error) {
 	}, nil
 }
 
-func (pr *Persistent) matchOps(value map[string]any, keyRanges map[string]*keyRange) (bool, error) {
-	compositeValue := maps.Clone(value)
+func (pr *Persistent) matchOps(value map[string]any, keyRanges map[string]*keyRange, skip string) (bool, error) {
+	compositeValue := make(map[string]any)
 	for k := range keyRanges {
+		if k == skip {
+			continue
+		}
 		_, ok := value[k]
 		if ok {
 			continue
@@ -270,9 +270,14 @@ func (pr *Persistent) matchOps(value map[string]any, keyRanges map[string]*keyRa
 		}
 	}
 	for name, r := range keyRanges {
+		if name == skip {
+			continue
+		}
 		v, ok := compositeValue[name]
 		if !ok {
-			return false, ErrObjectMissingField(name)
+			if v, ok = value[name]; !ok {
+				return false, ErrFieldNotFoundInColumns(name)
+			}
 		}
 		vBytes, err := orderedMa.Marshal(v)
 		if err != nil {
@@ -283,75 +288,4 @@ func (pr *Persistent) matchOps(value map[string]any, keyRanges map[string]*keyRa
 		}
 	}
 	return true, nil
-}
-
-func apply(value any, o Op) (bool, error) {
-	if reflect.TypeOf(value) != reflect.TypeOf(o.Value) {
-		return false, ErrTypeMismatch(value, o.Value)
-	}
-	v, err := compare(value, o.Value)
-	if err != nil {
-		return false, err
-	}
-	switch o.Type {
-	case OpEq:
-		return v == 0, nil
-	case OpNe:
-		return v != 0, nil
-	case OpGt:
-		return v > 0, nil
-	case OpLt:
-		return v < 0, nil
-	case OpGe:
-		return v >= 0, nil
-	case OpLe:
-		return v <= 0, nil
-	default:
-		return false, ErrUnsupportedOperator(o.Type)
-	}
-}
-
-func compare(a, b any) (int, error) {
-	switch va := a.(type) {
-	case int:
-		return cmp.Compare(va, b.(int)), nil
-	case int8:
-		return cmp.Compare(va, b.(int8)), nil
-	case int16:
-		return cmp.Compare(va, b.(int16)), nil
-	case int32:
-		return cmp.Compare(va, b.(int32)), nil
-	case int64:
-		return cmp.Compare(va, b.(int64)), nil
-	case uint:
-		return cmp.Compare(va, b.(uint)), nil
-	case uint8:
-		return cmp.Compare(va, b.(uint8)), nil
-	case uint16:
-		return cmp.Compare(va, b.(uint16)), nil
-	case uint32:
-		return cmp.Compare(va, b.(uint32)), nil
-	case uint64:
-		return cmp.Compare(va, b.(uint64)), nil
-	case uintptr:
-		return cmp.Compare(va, b.(uintptr)), nil
-	case float32:
-		return cmp.Compare(va, b.(float32)), nil
-	case float64:
-		return cmp.Compare(va, b.(float64)), nil
-	case string:
-		return cmp.Compare(va, b.(string)), nil
-	case []any:
-		ba, err := orderedMa.Marshal(a)
-		if err != nil {
-			return 0, err
-		}
-		bb, err := orderedMa.Marshal(b)
-		if err != nil {
-			return 0, err
-		}
-		return bytes.Compare(ba, bb), nil
-	default:
-		return 0, ErrUnsupportedType(a)
-	}
 }

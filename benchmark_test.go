@@ -45,7 +45,10 @@ func BenchmarkInsert(b *testing.B) {
 				// For simplicity and speed, let's do a batch insert inside the loop,
 				// but that means we are benchmarking N * count inserts.
 				// Let's structure it so we measure the time to insert 'count' records.
-				tx, _ := db.Begin(true)
+				tx, err := db.Begin(true)
+				if err != nil {
+					b.Fatal(err)
+				}
 				relation := fmt.Sprintf("bench_%d", rand.Int()) // use rand to avoid conflicts if possible, or just unique
 				p, _ := tx.CreatePersistent(relation, map[string]ColumnSpec{
 					"id":  {},

@@ -2,7 +2,6 @@ package thunder
 
 import (
 	"bytes"
-	"encoding/binary"
 	"iter"
 	"slices"
 
@@ -196,11 +195,7 @@ func (pr *Persistent) Insert(obj map[string]any) error {
 
 	// Update indexes
 	for _, idxName := range pr.indexNames {
-		idxLoc := &indexLocator{
-			Key: value[idxName],
-			Id:  id,
-		}
-		err := pr.indexes.insert(idxName, idxLoc)
+		err := pr.indexes.insert(idxName, value[idxName], id[:])
 		if err != nil {
 			return err
 		}
@@ -223,18 +218,12 @@ func (pr *Persistent) Delete(ranges map[string]*keyRange) error {
 			if err != nil {
 				return err
 			}
-			idxLoc := &indexLocator{
-				Key: key,
-				Id:  e.id,
-			}
-			if err := pr.indexes.delete(idxName, idxLoc); err != nil {
+			if err := pr.indexes.delete(idxName, key, e.id[:]); err != nil {
 				return err
 			}
 		}
 		// Delete from data
-		var idBytes [8]byte
-		binary.BigEndian.PutUint64(idBytes[:], e.id)
-		if err := pr.data.delete(idBytes[:]); err != nil {
+		if err := pr.data.delete(e.id[:]); err != nil {
 			return err
 		}
 	}
@@ -328,14 +317,11 @@ func (pr *Persistent) iter(ranges map[string]*keyRange) (iter.Seq2[entry, error]
 	}
 	return func(yield func(entry, error) bool) {
 		for id := range idxes {
-			var idBytes [8]byte
-			binary.BigEndian.PutUint64(idBytes[:], id)
-
 			values, err := pr.data.get(&keyRange{
 				includeEnd:   true,
 				includeStart: true,
-				startKey:     idBytes[:],
-				endKey:       idBytes[:],
+				startKey:     id[:],
+				endKey:       id[:],
 			})
 			if err != nil {
 				if !yield(entry{}, err) {
@@ -385,8 +371,9 @@ func (pr *Persistent) computeKey(obj map[string]any, name string) ([]byte, error
 	if !ok {
 		return nil, ErrFieldNotFoundInColumns(name)
 	}
-	keyParts := []any{}
+	var keyParts []any
 	if len(keySpec.ReferenceCols) > 0 {
+		keyParts = make([]any, 0, len(keySpec.ReferenceCols))
 		for _, refCol := range keySpec.ReferenceCols {
 			v, ok := obj[refCol]
 			if !ok {
@@ -399,7 +386,7 @@ func (pr *Persistent) computeKey(obj map[string]any, name string) ([]byte, error
 		if !ok {
 			return nil, ErrObjectMissingField(name)
 		}
-		keyParts = append(keyParts, v)
+		keyParts = []any{v}
 	}
 	return orderedMa.Marshal(keyParts)
 }

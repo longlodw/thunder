@@ -47,9 +47,7 @@ func loadIndex(
 	}, nil
 }
 
-func (idx *indexStorage) insert(name string, idxLoc *indexLocator) error {
-	key := idxLoc.Key
-	id := idxLoc.Id
+func (idx *indexStorage) insert(name string, key, id []byte) error {
 	indexBk := idx.bucket.Bucket([]byte(name))
 	if indexBk == nil {
 		return ErrIndexNotFound(name)
@@ -61,9 +59,7 @@ func (idx *indexStorage) insert(name string, idxLoc *indexLocator) error {
 	return indexBk.Put(compositeKey, nil)
 }
 
-func (idx *indexStorage) delete(name string, idxLoc *indexLocator) error {
-	key := idxLoc.Key
-	id := idxLoc.Id
+func (idx *indexStorage) delete(name string, key, id []byte) error {
 	indexBk := idx.bucket.Bucket([]byte(name))
 	if indexBk == nil {
 		return ErrIndexNotFound(name)
@@ -75,17 +71,12 @@ func (idx *indexStorage) delete(name string, idxLoc *indexLocator) error {
 	return indexBk.Delete(compositeKey)
 }
 
-type indexLocator struct {
-	Key []byte `json:"key"`
-	Id  uint64 `json:"id"`
-}
-
-func (idx *indexStorage) get(name string, kr *keyRange) (iter.Seq2[uint64, error], error) {
+func (idx *indexStorage) get(name string, kr *keyRange) (iter.Seq2[[8]byte, error], error) {
 	idxBk := idx.bucket.Bucket([]byte(name))
 	if idxBk == nil {
 		return nil, ErrIndexNotFound(name)
 	}
-	return func(yield func(uint64, error) bool) {
+	return func(yield func([8]byte, error) bool) {
 		c := idxBk.Cursor()
 		var k []byte
 		var seekPrefix []byte
@@ -94,7 +85,7 @@ func (idx *indexStorage) get(name string, kr *keyRange) (iter.Seq2[uint64, error
 		if kr.startKey != nil {
 			seekPrefix, err = orderedMa.Marshal([]any{kr.startKey})
 			if err != nil {
-				if !yield(0, err) {
+				if !yield([8]byte{}, err) {
 					return
 				}
 				return
@@ -115,14 +106,18 @@ func (idx *indexStorage) get(name string, kr *keyRange) (iter.Seq2[uint64, error
 		for ; k != nil; k, _ = c.Next() {
 			var parts []any
 			if err := orderedMa.Unmarshal(k, &parts); err != nil {
-				if !yield(0, err) {
+				if !yield([8]byte{}, err) {
 					return
 				}
 				continue
 			}
 
 			if len(parts) != 2 {
-				continue
+				if yield([8]byte{}, ErrCorruptedIndexEntry) {
+					continue
+				} else {
+					return
+				}
 			}
 
 			var valBytes []byte
@@ -132,39 +127,47 @@ func (idx *indexStorage) get(name string, kr *keyRange) (iter.Seq2[uint64, error
 			case string:
 				valBytes = []byte(v)
 			default:
-				continue
+				if yield([8]byte{}, ErrCorruptedIndexEntry) {
+					continue
+				} else {
+					return
+				}
 			}
 
 			idAny := parts[1]
 
-			var id uint64
+			var id [8]byte
 			switch v := idAny.(type) {
-			case uint64:
-				id = v
-			case int64:
-				id = uint64(v)
-			case int:
-				id = uint64(v)
+			case string:
+				if len(v) != 8 {
+					if yield([8]byte{}, ErrCorruptedIndexEntry) {
+						continue
+					} else {
+						return
+					}
+				}
+				copy(id[:], v)
+			case []byte:
+				if len(v) != 8 {
+					if yield([8]byte{}, ErrCorruptedIndexEntry) {
+						continue
+					} else {
+						return
+					}
+				}
+				copy(id[:], v)
 			default:
-				continue
+				if yield([8]byte{}, ErrCorruptedIndexEntry) {
+					continue
+				} else {
+					return
+				}
 			}
 
+			if !lessThanEnd(valBytes) {
+				break
+			}
 			if !kr.contains(valBytes) {
-				// We need to check if we should stop or just skip.
-				// Since we are iterating in order:
-				// If valBytes > endKey, we can stop.
-				// But we need to check strict inequality for endKey.
-
-				if !lessThanEnd(valBytes) {
-					break
-				}
-
-				// If we are here, it means kr.contains returned false,
-				// but we are still <= endKey.
-				// This implies we are < startKey (shouldn't happen with Seek unless we wrapped around? No)
-				// OR !includeStart/!includeEnd boundary cases.
-				// OR excluded.
-
 				continue
 			}
 

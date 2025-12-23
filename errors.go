@@ -39,4 +39,5 @@ var (
 	ErrDataNotFound          = errors.New("data not found")
 	ErrInvalidDataFormat     = errors.New("invalid data format")
 	ErrMetaDataNotFound      = errors.New("metadata not found")
+	ErrCorruptedIndexEntry   = errors.New("corrupted index entry")
 )

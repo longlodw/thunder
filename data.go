@@ -46,21 +46,21 @@ func loadData(
 	}, nil
 }
 
-func (d *dataStorage) insert(value map[string]any) (uint64, error) {
+func (d *dataStorage) insert(value map[string]any) ([8]byte, error) {
 	if len(value) != len(d.fields) {
-		return 0, ErrObjectFieldCountMismatch
+		return [8]byte{}, ErrObjectFieldCountMismatch
 	}
 	id, err := d.bucket.NextSequence()
 	if err != nil {
-		return 0, err
+		return [8]byte{}, err
 	}
 	var idBytes [8]byte
 	binary.BigEndian.PutUint64(idBytes[:], id)
 	valueBytes, err := d.maUn.Marshal(value)
 	if err != nil {
-		return 0, err
+		return idBytes, err
 	}
-	return id, d.bucket.Put(idBytes[:], valueBytes)
+	return idBytes, d.bucket.Put(idBytes[:], valueBytes)
 }
 
 func (d *dataStorage) get(kr *keyRange) (iter.Seq2[entry, error], error) {
@@ -93,10 +93,11 @@ func (d *dataStorage) get(kr *keyRange) (iter.Seq2[entry, error], error) {
 				}
 				continue
 			}
-			id := binary.BigEndian.Uint64(k)
+			idFixed := [8]byte{}
+			copy(idFixed[:], k)
 			if !yield(entry{
 				value: value,
-				id:    id,
+				id:    idFixed,
 			}, nil) {
 				return
 			}
@@ -109,6 +110,6 @@ func (d *dataStorage) delete(id []byte) error {
 }
 
 type entry struct {
-	id    uint64
+	id    [8]byte
 	value map[string]any
 }

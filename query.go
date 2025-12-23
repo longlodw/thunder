@@ -25,7 +25,9 @@ func newQuery(tx *Tx, name string, columns []string, recursive bool) (*Query, er
 	if recursive {
 		fields := make(map[string]ColumnSpec)
 		for _, col := range columns {
-			fields[col] = ColumnSpec{}
+			fields[col] = ColumnSpec{
+				Indexed: true,
+			}
 		}
 		fields[queryAllUniqueCol] = ColumnSpec{
 			Unique:        true,

@@ -10,11 +10,13 @@ import (
 type dataStorage struct {
 	bucket *boltdb.Bucket
 	fields []string
+	maUn   MarshalUnmarshaler
 }
 
 func newData(
 	parentBucket *boltdb.Bucket,
 	fields []string,
+	maUn MarshalUnmarshaler,
 ) (*dataStorage, error) {
 	bucket, err := parentBucket.CreateBucketIfNotExists([]byte("data"))
 	if err != nil {
@@ -23,12 +25,14 @@ func newData(
 	return &dataStorage{
 		bucket: bucket,
 		fields: fields,
+		maUn:   maUn,
 	}, nil
 }
 
 func loadData(
 	parentBucket *boltdb.Bucket,
 	fields []string,
+	maUn MarshalUnmarshaler,
 ) (*dataStorage, error) {
 	bucket := parentBucket.Bucket([]byte("data"))
 	if bucket == nil {
@@ -37,10 +41,11 @@ func loadData(
 	return &dataStorage{
 		bucket: bucket,
 		fields: fields,
+		maUn:   maUn,
 	}, nil
 }
 
-func (d *dataStorage) insert(value map[string][]byte) ([]byte, error) {
+func (d *dataStorage) insert(value map[string]any) ([]byte, error) {
 	if len(value) != len(d.fields) {
 		return nil, ErrObjectFieldCountMismatch
 	}
@@ -52,18 +57,11 @@ func (d *dataStorage) insert(value map[string][]byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	bck, err := d.bucket.CreateBucketIfNotExists(idBytes)
+	valueBytes, err := d.maUn.Marshal(value)
 	if err != nil {
 		return nil, err
 	}
-	for _, f := range d.fields {
-		if v, ok := value[f]; !ok {
-			return nil, ErrObjectMissingField(f)
-		} else if err := bck.Put([]byte(f), v); err != nil {
-			return nil, err
-		}
-	}
-	return idBytes, nil
+	return idBytes, d.bucket.Put(idBytes, valueBytes)
 }
 
 func (d *dataStorage) get(kr *keyRange) (iter.Seq2[entry, error], error) {
@@ -76,29 +74,25 @@ func (d *dataStorage) get(kr *keyRange) (iter.Seq2[entry, error], error) {
 			cmp := bytes.Compare(k, kr.endKey)
 			return cmp < 0 || (cmp == 0 && kr.includeEnd)
 		}
-		var k []byte
+		var k, v []byte
 		if kr.startKey != nil {
-			k, _ = c.Seek(kr.startKey)
+			k, v = c.Seek(kr.startKey)
 		} else {
-			k, _ = c.First()
+			k, v = c.First()
 		}
 		if !kr.includeStart {
-			k, _ = c.Next()
+			k, v = c.Next()
 		}
-		for ; k != nil && lessThan(k); k, _ = c.Next() {
+		for ; k != nil && lessThan(k); k, v = c.Next() {
 			if !kr.contains(k) {
 				continue
 			}
-			bck := d.bucket.Bucket(k)
-			if bck == nil {
-				if !yield(entry{}, ErrDataNotFound) {
+			var value map[string]any
+			if err := d.maUn.Unmarshal(v, &value); err != nil {
+				if !yield(entry{}, err) {
 					return
 				}
 				continue
-			}
-			value := make(map[string][]byte)
-			for _, f := range d.fields {
-				value[f] = bck.Get([]byte(f))
 			}
 			if !yield(entry{
 				id:    k,
@@ -111,10 +105,10 @@ func (d *dataStorage) get(kr *keyRange) (iter.Seq2[entry, error], error) {
 }
 
 func (d *dataStorage) delete(id []byte) error {
-	return d.bucket.DeleteBucket(id)
+	return d.bucket.Delete(id)
 }
 
 type entry struct {
 	id    []byte
-	value map[string][]byte
+	value map[string]any
 }

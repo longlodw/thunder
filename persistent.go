@@ -2,6 +2,7 @@ package thunder
 
 import (
 	"bytes"
+	"encoding/binary"
 	"iter"
 	"slices"
 
@@ -231,11 +232,9 @@ func (pr *Persistent) Delete(ranges map[string]*keyRange) error {
 			}
 		}
 		// Delete from data
-		idBytes, err := orderedMa.Marshal([]any{e.id})
-		if err != nil {
-			return err
-		}
-		if err := pr.data.delete(idBytes); err != nil {
+		var idBytes [8]byte
+		binary.BigEndian.PutUint64(idBytes[:], e.id)
+		if err := pr.data.delete(idBytes[:]); err != nil {
 			return err
 		}
 	}
@@ -329,18 +328,14 @@ func (pr *Persistent) iter(ranges map[string]*keyRange) (iter.Seq2[entry, error]
 	}
 	return func(yield func(entry, error) bool) {
 		for id := range idxes {
-			idBytes, err := orderedMa.Marshal([]any{id})
-			if err != nil {
-				if !yield(entry{}, err) {
-					return
-				}
-				continue
-			}
+			var idBytes [8]byte
+			binary.BigEndian.PutUint64(idBytes[:], id)
+
 			values, err := pr.data.get(&keyRange{
 				includeEnd:   true,
 				includeStart: true,
-				startKey:     idBytes,
-				endKey:       idBytes,
+				startKey:     idBytes[:],
+				endKey:       idBytes[:],
 			})
 			if err != nil {
 				if !yield(entry{}, err) {

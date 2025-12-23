@@ -58,21 +58,17 @@ func (idx *indexStorage) insert(name string, idxLoc *indexLocator) error {
 	if err != nil {
 		return err
 	}
-	compositeKeyStored, err := idx.maUn.Marshal(idxLoc)
-	if err != nil {
-		return err
-	}
-	return indexBk.Put(compositeKey, compositeKeyStored)
+	return indexBk.Put(compositeKey, nil)
 }
 
 func (idx *indexStorage) delete(name string, idxLoc *indexLocator) error {
 	key := idxLoc.Key
-	seq := idxLoc.Id
+	id := idxLoc.Id
 	indexBk := idx.bucket.Bucket([]byte(name))
 	if indexBk == nil {
 		return ErrIndexNotFound(name)
 	}
-	compositeKey, err := orderedMa.Marshal([]any{key, seq})
+	compositeKey, err := orderedMa.Marshal([]any{key, id})
 	if err != nil {
 		return err
 	}
@@ -91,15 +87,23 @@ func (idx *indexStorage) get(name string, kr *keyRange) (iter.Seq2[uint64, error
 	}
 	return func(yield func(uint64, error) bool) {
 		c := idxBk.Cursor()
-		var startKey, v []byte
+		var k []byte
+		var seekPrefix []byte
+		var err error
+
 		if kr.startKey != nil {
-			startKey, v = c.Seek(kr.startKey)
+			seekPrefix, err = orderedMa.Marshal([]any{kr.startKey})
+			if err != nil {
+				if !yield(0, err) {
+					return
+				}
+				return
+			}
+			k, _ = c.Seek(seekPrefix)
 		} else {
-			startKey, v = c.First()
+			k, _ = c.First()
 		}
-		if !kr.includeStart {
-			startKey, v = c.Next()
-		}
+
 		lessThanEnd := func(k []byte) bool {
 			if kr.endKey == nil {
 				return true
@@ -107,22 +111,64 @@ func (idx *indexStorage) get(name string, kr *keyRange) (iter.Seq2[uint64, error
 			cmpEnd := bytes.Compare(k, kr.endKey)
 			return cmpEnd < 0 || (cmpEnd == 0 && kr.includeEnd)
 		}
-		for k := startKey; k != nil; k, v = c.Next() {
-			var keyPart indexLocator
-			if err := idx.maUn.Unmarshal(v, &keyPart); err != nil {
+
+		for ; k != nil; k, _ = c.Next() {
+			var parts []any
+			if err := orderedMa.Unmarshal(k, &parts); err != nil {
 				if !yield(0, err) {
 					return
 				}
 				continue
 			}
-			idxKey := keyPart.Key
-			if !kr.contains(idxKey) || kr.doesExclude(idxKey) {
+
+			if len(parts) != 2 {
 				continue
 			}
-			if !lessThanEnd(idxKey) {
-				break
+
+			var valBytes []byte
+			switch v := parts[0].(type) {
+			case []byte:
+				valBytes = v
+			case string:
+				valBytes = []byte(v)
+			default:
+				continue
 			}
-			if !yield(keyPart.Id, nil) {
+
+			idAny := parts[1]
+
+			var id uint64
+			switch v := idAny.(type) {
+			case uint64:
+				id = v
+			case int64:
+				id = uint64(v)
+			case int:
+				id = uint64(v)
+			default:
+				continue
+			}
+
+			if !kr.contains(valBytes) {
+				// We need to check if we should stop or just skip.
+				// Since we are iterating in order:
+				// If valBytes > endKey, we can stop.
+				// But we need to check strict inequality for endKey.
+
+				if !lessThanEnd(valBytes) {
+					break
+				}
+
+				// If we are here, it means kr.contains returned false,
+				// but we are still <= endKey.
+				// This implies we are < startKey (shouldn't happen with Seek unless we wrapped around? No)
+				// OR !includeStart/!includeEnd boundary cases.
+				// OR excluded.
+
+				continue
+			}
+
+			if !yield(id, nil) {
 				return
 			}
 		}

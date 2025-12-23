@@ -37,18 +37,12 @@ func BenchmarkInsert(b *testing.B) {
 		b.Run(fmt.Sprintf("NoIndex_%d", count), func(b *testing.B) {
 			db, cleanup := setupBenchmarkDB(b)
 			defer cleanup()
-
-			for b.Loop() {
-				// Re-create DB/Table for each iteration to prevent growth affecting timing?
-				// Or typically we just insert N records in the loop.
-				// Since we want to measure "Insert", usually we do one transaction per batch or per item.
-				// For simplicity and speed, let's do a batch insert inside the loop,
-				// but that means we are benchmarking N * count inserts.
-				// Let's structure it so we measure the time to insert 'count' records.
+			testBody := func() {
 				tx, err := db.Begin(true)
 				if err != nil {
 					b.Fatal(err)
 				}
+				defer tx.Rollback()
 				relation := fmt.Sprintf("bench_%d", rand.Int()) // use rand to avoid conflicts if possible, or just unique
 				p, _ := tx.CreatePersistent(relation, map[string]ColumnSpec{
 					"id":  {},
@@ -63,14 +57,21 @@ func BenchmarkInsert(b *testing.B) {
 				}
 				tx.Commit()
 			}
+			for b.Loop() {
+				testBody()
+			}
 		})
 
 		b.Run(fmt.Sprintf("WithIndex_%d", count), func(b *testing.B) {
 			db, cleanup := setupBenchmarkDB(b)
 			defer cleanup()
 
-			for b.Loop() {
-				tx, _ := db.Begin(true)
+			loopBody := func() {
+				tx, err := db.Begin(true)
+				if err != nil {
+					b.Fatal(err)
+				}
+				defer tx.Rollback()
 				relation := fmt.Sprintf("bench_idx_%d", rand.Int())
 				p, _ := tx.CreatePersistent(relation, map[string]ColumnSpec{
 					"id":  {},
@@ -85,6 +86,9 @@ func BenchmarkInsert(b *testing.B) {
 				}
 				tx.Commit()
 			}
+			for b.Loop() {
+				loopBody()
+			}
 		})
 	}
 }
@@ -96,6 +100,7 @@ func BenchmarkSelect(b *testing.B) {
 	// Prep data: 10k records
 	count := 10000
 	tx, _ := db.Begin(true)
+	defer tx.Rollback()
 
 	// Relation with index on "val"
 	relationIdx := "bench_select_idx"
@@ -204,6 +209,7 @@ func BenchmarkRecursion(b *testing.B) {
 	// Hierarchy depth 100
 	depth := 100
 	tx, _ := db.Begin(true)
+	defer tx.Rollback()
 	relation := "graph"
 	// We need indexes for efficient recursion (joins)
 	p, _ := tx.CreatePersistent(relation, map[string]ColumnSpec{
@@ -227,81 +233,85 @@ func BenchmarkRecursion(b *testing.B) {
 	// Recursive Query Setup
 	// Find all descendants of node_0
 	readTx, _ := db.Begin(false) // Note: Recursive query might need write tx if it creates temp backing?
-	readTx.Rollback()
+	defer readTx.Rollback()
 
+	recursiveLoopBody := func() {
+		rtx, _ := db.Begin(true)
+		defer rtx.Rollback()
+
+		q, _ := rtx.CreateQuery("descendants", []string{"target"}, true)
+
+		// Base case: direct children of node_0
+		baseP, _ := rtx.LoadPersistent(relation)
+		// Select target where source = node_0
+		baseProj, _ := baseP.Project(map[string]string{"target": "target"})
+
+		// Creating a helper relation for the start node constraint
+		startNodeRel := "start_node"
+		startNodeP, _ := rtx.CreatePersistent(startNodeRel, map[string]ColumnSpec{
+			"source": {Indexed: true},
+		})
+		startNodeP.Insert(map[string]any{"source": "node_0"})
+
+		q.AddBody(baseProj, startNodeP)
+
+		// Recursive step: children of discovered targets
+		// Join graph G on G.source = descendant.target
+		recP, _ := rtx.LoadPersistent(relation)
+		recProj, _ := recP.Project(map[string]string{"target": "target"})
+
+		// We need to join q (source of truth for recursion) with recP
+		// q(target) -> recP(source) -> output(target)
+		q.AddBody(q, recProj)
+
+		// Execute
+		f, err := Filter()
+		if err != nil {
+			b.Fatal(err)
+		}
+		seq, _ := q.Select(f)
+		for range seq {
+		}
+	}
 	b.Run("Recursive_Engine", func(b *testing.B) {
 		for b.Loop() {
-			// Transaction per op because CreatePersistent modifies DB
-			rtx, _ := db.Begin(true)
-			// Cleanup temp query backing is handled by Rollback
-
-			q, _ := rtx.CreateQuery("descendants", []string{"target"}, true)
-
-			// Base case: direct children of node_0
-			baseP, _ := rtx.LoadPersistent(relation)
-			// Select target where source = node_0
-			baseProj, _ := baseP.Project(map[string]string{"target": "target"})
-
-			// Creating a helper relation for the start node constraint
-			startNodeRel := "start_node"
-			startNodeP, _ := rtx.CreatePersistent(startNodeRel, map[string]ColumnSpec{
-				"source": {Indexed: true},
-			})
-			startNodeP.Insert(map[string]any{"source": "node_0"})
-
-			q.AddBody(baseProj, startNodeP)
-
-			// Recursive step: children of discovered targets
-			// Join graph G on G.source = descendant.target
-			recP, _ := rtx.LoadPersistent(relation)
-			recProj, _ := recP.Project(map[string]string{"target": "target"})
-
-			// We need to join q (source of truth for recursion) with recP
-			// q(target) -> recP(source) -> output(target)
-			q.AddBody(q, recProj)
-
-			// Execute
-			f, err := Filter()
-			if err != nil {
-				b.Fatal(err)
-			}
-			seq, _ := q.Select(f)
-			for range seq {
-			}
-			rtx.Rollback()
+			recursiveLoopBody()
 		}
 	})
 
-	b.Run("Iterative_ClientSide", func(b *testing.B) {
-		for b.Loop() {
-			rtx, _ := db.Begin(false)
-			pLoad, _ := rtx.LoadPersistent(relation)
+	iterativeLoopBody := func() {
+		rtx, _ := db.Begin(false)
+		defer rtx.Rollback()
+		pLoad, _ := rtx.LoadPersistent(relation)
 
-			currentNodes := []string{"node_0"}
-			visited := map[string]bool{"node_0": true}
+		currentNodes := []string{"node_0"}
+		visited := map[string]bool{"node_0": true}
 
-			// Iterate until no new nodes
-			for len(currentNodes) > 0 {
-				var nextNodes []string
-				for _, node := range currentNodes {
-					// Find children
-					op := Eq("source", node)
-					f, err := Filter(op)
-					if err != nil {
-						b.Fatal(err)
-					}
-					seq, _ := pLoad.Select(f)
-					for row := range seq {
-						target := row["target"].(string)
-						if !visited[target] {
-							visited[target] = true
-							nextNodes = append(nextNodes, target)
-						}
+		// Iterate until no new nodes
+		for len(currentNodes) > 0 {
+			var nextNodes []string
+			for _, node := range currentNodes {
+				// Find children
+				op := Eq("source", node)
+				f, err := Filter(op)
+				if err != nil {
+					b.Fatal(err)
+				}
+				seq, _ := pLoad.Select(f)
+				for row := range seq {
+					target := row["target"].(string)
+					if !visited[target] {
+						visited[target] = true
+						nextNodes = append(nextNodes, target)
 					}
 				}
-				currentNodes = nextNodes
 			}
-			rtx.Rollback()
+			currentNodes = nextNodes
+		}
+	}
+	b.Run("Iterative_ClientSide", func(b *testing.B) {
+		for b.Loop() {
+			iterativeLoopBody()
 		}
 	})
 }

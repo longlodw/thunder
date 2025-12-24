@@ -16,6 +16,8 @@ This library is designed for Go applications needing an embedded database with c
 - **Flexible Serialization:** Uses pluggable marshalers/unmarshalers (MessagePack, JSON, Gob, or custom).
 - **Transaction Support:** Full support for ACID transactions (Read-Only and Read-Write).
 
+Note: Always call `tx.Rollback()` using `defer` to ensure the transaction is closed properly. To persist changes, you must explicitly call `tx.Commit()`. If `Commit()` is successful, the deferred `Rollback()` will be a no-op.
+
 ## Installation
 
 ```bash
@@ -91,6 +93,39 @@ func main() {
 		fmt.Printf("User: %s, Role: %s\n", row["username"], row["role"])
 	}
 }
+```
+
+### Uniques and Composite Indexes
+
+Thunder supports defining unique constraints and composite indexes.
+A **Composite Index** is an index that spans multiple columns.
+A **Unique Constraint** ensures that all values in a column (or a set of columns) are distinct across the table.
+
+```go
+// Define Schema with Unique and Composite Index
+users, err := tx.CreatePersistent("users", map[string]thunder.ColumnSpec{
+    "id":       {Unique: true}, // Unique constraint on single column
+    "username": {Indexed: true},
+    "first":    {},
+    "last":     {},
+    // Composite Index on (first, last) named "name"
+    // This allows efficient querying by both first and last name together
+    "name": {
+        ReferenceCols: []string{"first", "last"},
+        Indexed:       true,
+    },
+    // Composite Unique Constraint on (username, first) named "user_identity"
+    // This ensures that the combination of username and first name is unique
+    "user_identity": {
+        ReferenceCols: []string{"username", "first"},
+        Unique:        true,
+    },
+})
+
+// Querying using the composite index
+// Note: Pass values as a slice in the same order as ReferenceCols
+filter, _ := thunder.Filter(thunder.Eq("name", []any{"John", "Doe"}))
+results, _ := users.Select(filter)
 ```
 
 ### Recursive Queries

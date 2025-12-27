@@ -84,7 +84,8 @@ func main() {
 	users, _ = tx.LoadPersistent("users")
 
 	// Filter for username "alice"
-	filter, _ := thunder.Filter(thunder.Eq("username", "alice"))
+	// ToKeyRanges converts high-level operators into key ranges for the query engine
+	filter, _ := thunder.ToKeyRanges(thunder.Eq("username", "alice"))
 	
 	// Execute Select
 	results, _ := users.Select(filter)
@@ -124,7 +125,7 @@ users, err := tx.CreatePersistent("users", map[string]thunder.ColumnSpec{
 
 // Querying using the composite index
 // Note: Pass values as a slice in the same order as ReferenceCols
-filter, _ := thunder.Filter(thunder.Eq("name", []any{"John", "Doe"}))
+filter, _ := thunder.ToKeyRanges(thunder.Eq("name", []any{"John", "Doe"}))
 results, _ := users.Select(filter)
 ```
 
@@ -137,29 +138,46 @@ Thunder supports recursive Datalog-style queries, useful for traversing hierarch
 // Assume 'employees' table exists with 'id' and 'manager_id'
 
 // Define a recursive query "path" with columns "ancestor" and "descendant"
-qPath, _ := tx.CreateQuery("path", []string{"ancestor", "descendant"}, true)
+// The new API uses CreateRecursion instead of CreateQuery
+qPath, _ := tx.CreateRecursion("path", map[string]thunder.ColumnSpec{
+    "ancestor":   {},
+    "descendant": {},
+})
 
 // Rule 1: Direct reports (Base case)
-baseProj, _ := employees.Project(map[string]string{
-    "manager_id": "ancestor",
-    "id":         "descendant",
+// path(A, B) :- employees(manager_id=A, id=B)
+baseProj := employees.Project(map[string]string{
+    "ancestor":   "manager_id",
+    "descendant": "id",
 })
-qPath.AddBody(baseProj)
+qPath.AddBranch(baseProj)
 
 // Rule 2: Indirect reports (Recursive step)
+// path(A, C) :- employees(manager_id=A, id=B), path(ancestor=B, descendant=C)
 // Join employees(manager=a, id=b) with path(ancestor=b, descendant=c)
-edgeProj, _ := employees.Project(map[string]string{
-    "manager_id": "ancestor", // a
-    "id":         "join_key", // b
+
+// employees(A, B) -> project B as "join_key"
+edgeProj := employees.Project(map[string]string{
+    "ancestor": "manager_id", // A
+    "join_key": "id",         // B
 })
-pathProj, _ := qPath.Project(map[string]string{
-    "ancestor":   "join_key",   // b
-    "descendant": "descendant", // c
+
+// path(B, C) -> project B as "join_key"
+pathProj := qPath.Project(map[string]string{
+    "join_key":   "ancestor",   // B
+    "descendant": "descendant", // C
 })
-qPath.AddBody(edgeProj, pathProj)
+
+// Join edgeProj and pathProj, then project final result
+recursiveStep := edgeProj.Join(pathProj).Project(map[string]string{
+    "ancestor":   "ancestor",
+    "descendant": "descendant",
+})
+
+qPath.AddBranch(recursiveStep)
 
 // Execute query to find descendants of ID "1"
-filter, _ := thunder.Filter(thunder.Eq("ancestor", "1"))
+filter, _ := thunder.ToKeyRanges(thunder.Eq("ancestor", "1"))
 results, _ := qPath.Select(filter)
 ```
 
